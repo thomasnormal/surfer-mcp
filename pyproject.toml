@@ -1,0 +1,17 @@
+[project]
+name = "surfer-mcp"
+version = "0.1.0"
+description = "MCP server for controlling Surfer waveform viewer via WCP"
+requires-python = ">=3.10"
+dependencies = [
+    "mcp[cli]>=1.0.0",
+    "pyobjc-framework-quartz>=12.1",
+    "pywellen>=0.20.0",
+]
+
+[project.scripts]
+surfer-mcp = "surfer_mcp.server:main"
+
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
