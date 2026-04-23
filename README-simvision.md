@@ -26,7 +26,7 @@ Multiple SimVision instances can run side-by-side as named **sessions**.
 - Cadence Xcelium (provides `simvision`) — your environment must have it on `PATH`.
 - `Xvfb` for headless mode (`dnf install xorg-x11-server-Xvfb` / `apt install xvfb`).
 - `gs` (Ghostscript) or `convert` (ImageMagick) for PNG waveform screenshots.
-- For full-GUI screenshots (`screenshot_gui` / `list_sim_windows`): install the `screenshot` extra with `uv sync --extra screenshot` — pulls in `mss`, `python-xlib`, and `Pillow`. No sudo, no external binaries.
+- All Python-side screenshot tooling (`mss`, `python-xlib`, `Pillow`) is pulled in as a default dependency — no extra install step.
 
 ## Installation
 
@@ -145,7 +145,8 @@ Useful patterns:
 ## Testing
 
 ```bash
-uv run --extra dev pytest tests/
+uv sync --extra dev
+uv run pytest tests/
 ```
 
 Full suite runs in ~10 s thanks to Xvfb. The client spawns its own Xvfb — no outer `xvfb-run` needed.

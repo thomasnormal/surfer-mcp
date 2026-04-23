@@ -43,6 +43,8 @@ This repo contains two sibling MCP servers under `src/`:
 uv run --extra dev pytest tests/
 ```
 
+(screenshot deps — `mss`, `python-xlib`, `Pillow` — are in the default dependency list, no extra needed.)
+
 Full suite finishes in ~10 s under Xvfb. No outer `xvfb-run` wrapper needed; the client handles Xvfb internally.
 
 ## Debugging tips

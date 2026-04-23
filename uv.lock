@@ -1030,7 +1030,10 @@ version = "0.1.0"
 source = { editable = "." }
 dependencies = [
     { name = "mcp", extra = ["cli"] },
+    { name = "mss" },
+    { name = "pillow" },
     { name = "pyobjc-framework-quartz", marker = "sys_platform == 'darwin'" },
+    { name = "python-xlib", marker = "sys_platform != 'darwin' and sys_platform != 'win32'" },
     { name = "pywellen" },
 ]
 
@@ -1038,23 +1041,18 @@ dependencies = [
 dev = [
     { name = "pytest" },
 ]
-screenshot = [
-    { name = "mss" },
-    { name = "pillow" },
-    { name = "python-xlib" },
-]
 
 [package.metadata]
 requires-dist = [
     { name = "mcp", extras = ["cli"], specifier = ">=1.0.0" },
-    { name = "mss", marker = "extra == 'screenshot'", specifier = ">=10.2.0" },
-    { name = "pillow", marker = "extra == 'screenshot'", specifier = ">=12.2.0" },
+    { name = "mss", specifier = ">=10.2.0" },
+    { name = "pillow", specifier = ">=12.2.0" },
     { name = "pyobjc-framework-quartz", marker = "sys_platform == 'darwin'", specifier = ">=12.1" },
     { name = "pytest", marker = "extra == 'dev'", specifier = ">=7" },
-    { name = "python-xlib", marker = "extra == 'screenshot'", specifier = ">=0.33" },
+    { name = "python-xlib", marker = "sys_platform != 'darwin' and sys_platform != 'win32'", specifier = ">=0.33" },
     { name = "pywellen", specifier = ">=0.20.0" },
 ]
-provides-extras = ["dev", "screenshot"]
+provides-extras = ["dev"]
 
 [[package]]
 name = "tomli"

@@ -7,6 +7,10 @@ dependencies = [
     "mcp[cli]>=1.0.0",
     "pyobjc-framework-quartz>=12.1; sys_platform == 'darwin'",
     "pywellen>=0.20.0",
+    # simvision-mcp screenshot tooling — small, pure-Python, cross-platform.
+    "mss>=10.2.0",
+    "pillow>=12.2.0",
+    "python-xlib>=0.33; sys_platform != 'darwin' and sys_platform != 'win32'",
 ]
 
 [project.scripts]
@@ -15,11 +19,6 @@ simvision-mcp = "simvision_mcp.server:main"
 
 [project.optional-dependencies]
 dev = ["pytest>=7"]
-screenshot = [
-    "mss>=10.2.0",
-    "pillow>=12.2.0",
-    "python-xlib>=0.33",
-]
 
 [build-system]
 requires = ["hatchling"]
