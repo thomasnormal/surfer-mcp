@@ -6,3 +6,13 @@ dist/
 build/
 .DS_Store
 *.log
+
+# SimVision runtime artifacts
+.simvision/
+*.svcf
+simvision*.diag
+# VCD translation cache (regenerated on load)
+tests/data/*.trn
+tests/data/*.dsn
+# pytest
+.pytest_cache/
