@@ -462,32 +462,91 @@ async def _handle_shutdown(sess: WcpSession, msg: dict) -> dict:
 _GUI_EVENT_NAMES = {"goto_declaration", "add_drivers", "add_loads"}
 
 _EVENT_MENU_TCL = r"""
-# Idempotent — safe to call on every WCP client connect.
 namespace eval ::wcp {}
+
+proc ::wcp::_install_menus {wname} {
+    if {[catch {window type $wname} wtype] || $wtype ne "waveform"} {
+        return
+    }
+    variable _menu_windows
+    if {[info exists _menu_windows($wname)]} {
+        return
+    }
+
+    foreach path {
+        "WCP>Goto Declaration"
+        "WCP>Add Drivers"
+        "WCP>Add Loads"
+    } {
+        catch {window extensions menu delete -window $wname $path}
+    }
+
+    # Each `menu create` is wrapped in `catch` — if it errors (e.g. the WCP
+    # parent menu doesn't exist yet on a freshly-created window), an uncaught
+    # error from inside an `after` timer callback wedges SimVision's next
+    # `waveform new` indefinitely. Swallowing the error keeps the install
+    # best-effort and never poisons SimVision's event loop.
+    # %o is the object (signal) the menu fired on.
+    catch {window extensions menu create -window $wname \
+        "WCP>Goto Declaration" command \
+        -command {::mcp::push_event goto_declaration variable %o}}
+    catch {window extensions menu create -window $wname \
+        "WCP>Add Drivers" command \
+        -command {::mcp::push_event add_drivers variable %o}}
+    catch {window extensions menu create -window $wname \
+        "WCP>Add Loads" command \
+        -command {::mcp::push_event add_loads variable %o}}
+
+    set _menu_windows($wname) 1
+}
+
+proc ::wcp::_window_event {args} {
+    array set ev $args
+    if {![info exists ev(type)] || $ev(type) ne "waveform"} {
+        return
+    }
+    if {![info exists ev(window)] || ![info exists ev(event)]} {
+        return
+    }
+    if {$ev(event) eq "!create"} {
+        # `after 1` (not `after idle`) — SimVision pumps idletasks during
+        # `waveform new` window construction. An `after idle` callback fires
+        # re-entrantly on a still-initializing window and poisons internal
+        # state; after ~4 such callbacks the next `waveform new` hangs. A
+        # real 1ms timer defers until after `waveform new` has fully
+        # returned. See docs/SIMVISION-MENU-HANG.md.
+        after 1 [list ::wcp::_install_menus $ev(window)]
+    } elseif {$ev(event) eq "!delete"} {
+        variable _menu_windows
+        catch {unset _menu_windows($ev(window))}
+    }
+}
+
+# Idempotent — safe to call on every WCP client connect.
 if {[info commands ::wcp::_installed] eq ""} {
     proc ::wcp::_installed {} {}
-    # %o is the object (signal) the menu fired on.
-    window extensions menu create -type waveform \
-        "WCP>Goto Declaration" command \
-        -command {::mcp::push_event goto_declaration variable %o}
-    window extensions menu create -type waveform \
-        "WCP>Add Drivers" command \
-        -command {::mcp::push_event add_drivers variable %o}
-    window extensions menu create -type waveform \
-        "WCP>Add Loads" command \
-        -command {::mcp::push_event add_loads variable %o}
+    window extensions notify add -caller wcp_gui_menus \
+        !create !delete ::wcp::_window_event
+    # Existing windows: install synchronously (no re-entrancy risk here —
+    # the window is fully realized when a WCP client connects later).
+    foreach wname [window find -type waveform] {
+        ::wcp::_install_menus $wname
+    }
 }
 """
 
 
-async def _register_gui_event_hooks(sv: SimVisionClient, subscribed: set[str]) -> None:
+async def _register_gui_event_hooks(
+    sv: SimVisionClient,
+    subscribed: set[str],
+) -> None:
     """Install custom menu items that emit WCP events when clicked.
 
-    Only installs once per SimVision session (idempotent), and only when the
+    Only installs once per SimVision session (idempotent), and only when a
     client has asked for a human-click event that needs GUI menu integration.
-    Menu items stay installed even after the WCP client disconnects; they're
-    harmless if no client is listening because `::mcp::push_event` no-ops when
-    the socket is gone.
+    Use per-window menu installation rather than `-type waveform`: Xcelium
+    2403 SimVision can hang on later `waveform new` calls after global
+    waveform-type menu extensions are installed.
     """
     if not (_GUI_EVENT_NAMES & subscribed):
         return
