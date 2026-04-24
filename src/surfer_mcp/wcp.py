@@ -65,6 +65,17 @@ class WcpClient:
         self._drain_queue(self._response_queue)
         self._drain_queue(self._event_queue)
 
+        # Dial-mode: if WCP_SERVER_URL is set (host:port or just port on
+        # 127.0.0.1), skip spawning Surfer and connect to an existing WCP
+        # server. Useful for wiring this client to simvision-wcp (or any
+        # other WCP backend) for testing / polyglot use.
+        server_url = os.environ.get("WCP_SERVER_URL")
+        if server_url:
+            await self._dial(server_url)
+            await self._handshake()
+            self._started = True
+            return
+
         surfer = shutil.which("surfer")
         if surfer is None:
             raise WcpError("surfer executable not found on PATH")
@@ -98,6 +109,20 @@ class WcpClient:
         # Perform handshake
         await self._handshake()
         self._started = True
+
+    async def _dial(self, target: str) -> None:
+        """Connect out to an existing WCP server at `host:port` or `port`."""
+        if ":" in target:
+            host, _, port_s = target.rpartition(":")
+        else:
+            host, port_s = "127.0.0.1", target
+        try:
+            port = int(port_s)
+        except ValueError as e:
+            raise WcpError(f"bad WCP_SERVER_URL {target!r}: {e}")
+        logger.info("WCP dial → %s:%d", host, port)
+        self._reader, self._writer = await asyncio.open_connection(host, port)
+        self._reader_task = asyncio.create_task(self._reader_loop())
 
     async def _on_connect(
         self, reader: asyncio.StreamReader, writer: asyncio.StreamWriter
