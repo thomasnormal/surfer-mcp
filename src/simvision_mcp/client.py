@@ -88,6 +88,38 @@ proc ::mcp::classify_scope {item} {
 proc ::mcp::accept {sock addr port} {
     fconfigure $sock -buffering line -translation lf -encoding binary -blocking 0
     fileevent $sock readable [list ::mcp::handle $sock]
+    # Remember the sock so async event pushes (from cursor/marker notify
+    # callbacks, custom menu items, etc.) can reach Python.
+    set ::mcp::active_sock $sock
+}
+
+# Push an async event frame to Python. Format:
+#   evt <hex-of-json>
+# where the JSON is {"event": "<name>", ...extra fields}.
+# Python demuxes these from command responses by the "evt" leading token.
+proc ::mcp::push_event {event args} {
+    if {![info exists ::mcp::active_sock]} return
+    if {[catch {
+        set payload "{\"event\":\"$event\""
+        foreach {k v} $args {
+            append payload ",\"$k\":\"[::mcp::jsonesc $v]\""
+        }
+        append payload "}"
+        set bytes [encoding convertto utf-8 $payload]
+        binary scan $bytes H* hex
+        puts $::mcp::active_sock "evt $hex"
+        flush $::mcp::active_sock
+    } err]} {
+        # Socket closed or similar — swallow.
+    }
+}
+
+# Minimal JSON string escaper — enough for signal/cursor names.
+proc ::mcp::jsonesc {s} {
+    set s [string map {
+        "\\" "\\\\"  "\"" "\\\""  "\n" "\\n"  "\r" "\\r"  "\t" "\\t"
+    } $s]
+    return $s
 }
 
 proc ::mcp::handle {sock} {
@@ -231,10 +263,16 @@ class SimVisionClient:
         self._display: str | None = None
         self._reader: asyncio.StreamReader | None = None
         self._writer: asyncio.StreamWriter | None = None
-        self._lock = asyncio.Lock()
+        self._lock = asyncio.Lock()  # serializes command send()s
         self._start_lock = asyncio.Lock()
         self._boot_path: str | None = None
         self._stderr_log = None
+        # Background task that reads the Tcl socket and demuxes responses vs.
+        # async events. Lazily created after connection.
+        self._reader_task: "asyncio.Task | None" = None
+        # Populated by the reader; send() awaits here. Events land in _events.
+        self._responses: "asyncio.Queue[tuple[str, str]] | None" = None
+        self._events: "asyncio.Queue[dict] | None" = None
         # When true, we attached to an existing listener and must not shut the
         # SimVision process down in stop().
         self._borrowed = False
@@ -282,6 +320,7 @@ class SimVisionClient:
                     "127.0.0.1", port
                 )
                 self._borrowed = True
+                self._spawn_reader_task()
                 logger.info("attached to existing SimVision on port %d", port)
                 return
             except (ConnectionRefusedError, OSError) as e:
@@ -348,6 +387,7 @@ class SimVisionClient:
                 self._reader, self._writer = await asyncio.open_connection(
                     "127.0.0.1", port
                 )
+                self._spawn_reader_task()
                 logger.info("connected to simvision control socket")
                 return
             except (ConnectionRefusedError, OSError) as e:
@@ -360,41 +400,108 @@ class SimVisionClient:
             f"simvision did not open control socket within 180s: {last_err}"
         )
 
+    def _spawn_reader_task(self) -> None:
+        """Start the background socket reader. Idempotent."""
+        if self._reader_task is not None and not self._reader_task.done():
+            return
+        self._responses = asyncio.Queue()
+        self._events = asyncio.Queue()
+        self._reader_task = asyncio.create_task(self._reader_loop())
+
+    async def _reader_loop(self) -> None:
+        """Continuously read framed lines from the Tcl socket, demux by status.
+
+        Three statuses:
+          `ok <hex>` / `err <hex>` — command responses, queued for send().
+          `evt <hex>` — async events pushed from Tcl, queued for next_event().
+        """
+        assert self._reader is not None
+        import json as _json
+        try:
+            while True:
+                line = await self._reader.readline()
+                if not line:
+                    break
+                parts = line.decode("ascii").strip().split(" ", 1)
+                status = parts[0]
+                rhex = parts[1] if len(parts) > 1 else ""
+                if rhex in ("-", ""):
+                    decoded = ""
+                else:
+                    try:
+                        decoded = bytes.fromhex(rhex).decode("utf-8")
+                    except ValueError:
+                        logger.warning("malformed frame: %r", line)
+                        continue
+
+                if status == "evt":
+                    try:
+                        ev = _json.loads(decoded) if decoded else {}
+                    except Exception:
+                        ev = {"raw": decoded}
+                    assert self._events is not None
+                    self._events.put_nowait(ev)
+                    logger.debug("<- evt %s", ev)
+                else:
+                    assert self._responses is not None
+                    self._responses.put_nowait((status, decoded))
+                    logger.debug(
+                        "<- %s %s",
+                        status,
+                        decoded if len(decoded) < 500 else decoded[:500] + "...",
+                    )
+        except asyncio.CancelledError:
+            raise
+        except Exception as e:
+            logger.warning("reader loop exiting: %s", e)
+
     async def send(self, tcl: str) -> str:
         """Send a Tcl command and return its result as a string. Raises on Tcl error."""
         if not self.running:
             await self.start()
 
         async with self._lock:
-            assert self._reader is not None and self._writer is not None
+            assert self._writer is not None and self._responses is not None
             hex_cmd = tcl.encode("utf-8").hex()
             logger.debug("-> %s", tcl if len(tcl) < 500 else tcl[:500] + "...[truncated]")
             self._writer.write((hex_cmd + "\n").encode("ascii"))
             await self._writer.drain()
             try:
-                line = await asyncio.wait_for(self._reader.readline(), timeout=60.0)
+                status, decoded = await asyncio.wait_for(
+                    self._responses.get(), timeout=60.0
+                )
             except asyncio.TimeoutError as e:
-                raise SimVisionError(f"timeout waiting for response to: {tcl}") from e
-            if not line:
-                raise SimVisionError("simvision closed the control connection")
-
-            parts = line.decode("ascii").strip().split(" ", 1)
-            status = parts[0]
-            rhex = parts[1] if len(parts) > 1 else ""
-            if rhex == "-" or rhex == "":
-                result = ""
-            else:
-                try:
-                    result = bytes.fromhex(rhex).decode("utf-8")
-                except ValueError:
-                    raise SimVisionError(f"malformed response: {line!r}")
-
-            logger.debug("<- %s %s", status, result if len(result) < 500 else result[:500] + "...")
+                raise SimVisionError(
+                    f"timeout waiting for response to: {tcl}"
+                ) from e
             if status == "err":
-                raise SimVisionError(result or "unknown Tcl error")
-            return result
+                raise SimVisionError(decoded or "unknown Tcl error")
+            return decoded
+
+    async def next_event(self, timeout: float | None = None) -> dict:
+        """Wait for the next async event pushed from SimVision's Tcl.
+
+        Events land in a queue fed by the background reader. Use for
+        cursor-moved / menu-click / custom Tcl notify callbacks registered
+        via the bootstrap's `::mcp::push_event` proc.
+        """
+        if self._events is None:
+            self._events = asyncio.Queue()
+        if timeout is None:
+            return await self._events.get()
+        return await asyncio.wait_for(self._events.get(), timeout=timeout)
 
     async def stop(self) -> None:
+        # Cancel the reader first — otherwise closing the socket races
+        # against its readline() and logs a noisy "reader loop exiting".
+        if self._reader_task is not None and not self._reader_task.done():
+            self._reader_task.cancel()
+            try:
+                await self._reader_task
+            except (asyncio.CancelledError, Exception):
+                pass
+            self._reader_task = None
+
         # When attached to an existing listener, just drop the socket —
         # we don't own the SimVision process and must not kill it.
         if self._borrowed:
@@ -413,7 +520,13 @@ class SimVisionClient:
             return
         try:
             # `exit` from SimVision's Tcl interpreter shuts the app down cleanly.
-            await asyncio.wait_for(self.send("after 50; exit"), timeout=2.0)
+            # Reader is cancelled, so send() fails — use writer directly.
+            if self._writer is not None:
+                tcl = "after 50; exit"
+                hex_cmd = tcl.encode("utf-8").hex()
+                self._writer.write((hex_cmd + "\n").encode("ascii"))
+                await self._writer.drain()
+                await asyncio.sleep(0.1)
         except Exception:
             pass
 
