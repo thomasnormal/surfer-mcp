@@ -244,6 +244,74 @@ async def test_wcp_get_item_list_and_info(sv, wcp_port):
             assert r["name"]
 
 
+async def test_wcp_add_items_mixed(sv, wcp_port):
+    """`add_items` accepts scopes and signals in one call, with recursion."""
+    import json
+    async with await WcpClient.connect(wcp_port) as client:
+        await sv.send("catch {database close waves}")
+        await sv.send("catch {waveform close Mixed}")
+        await sv.send("waveform new -name Mixed")
+        await sv.send("waveform using Mixed")
+
+        await client.call("load", source=VCD)
+        # Mix a scope (tiny::tb) and a signal path (tiny:::tb.clk).
+        resp = await client.call(
+            "add_items",
+            items=["tiny::tb", "tiny:::tb.clk"],
+            recursive=False,
+        )
+        # The scope expands to 3 signals; the explicit clk dedups internally
+        # since we already walked it — at minimum we get 3 unique IDs.
+        assert len(resp["ids"]) >= 3
+
+
+async def test_wcp_add_loads_event(sv, wcp_port):
+    """The add_loads event type fires and is delivered to subscribers."""
+    import asyncio as _asyncio
+    async with await WcpClient.connect(wcp_port, events=["add_loads"]) as client:
+        await _asyncio.sleep(0.1)
+        await sv.send("::mcp::push_event add_loads variable top.dut.en")
+        ev = await _asyncio.wait_for(client.recv_event(), timeout=3.0)
+        assert ev["event"] == "add_loads"
+        assert ev["variable"] == "top.dut.en"
+
+
+async def test_wcp_shutdown_tears_down_simvision():
+    """`shutdown` ends the SimVision process. Uses a dedicated session so the
+    session-scoped `sv` fixture isn't affected.
+    """
+    from simvision_mcp.client import SimVisionClient
+    from simvision_wcp.server import WcpServer
+
+    # Dedicated SimVision, dedicated WCP server, one-shot.
+    local_sv = SimVisionClient(headless=True)
+    await local_sv.start()
+    local_srv = WcpServer(port=0, headless=True)
+    local_srv._sv = local_sv
+    port = await local_srv.start()
+
+    try:
+        async with await WcpClient.connect(port) as client:
+            resp = await client.call("shutdown")
+            assert resp["command"] == "shutdown"
+        # After shutdown, the SimVision subprocess should be gone.
+        # Poll briefly — `exit` takes a moment to propagate.
+        import asyncio as _asyncio
+        for _ in range(20):
+            if local_sv._process is None or local_sv._process.poll() is not None:
+                break
+            await _asyncio.sleep(0.1)
+        assert (
+            local_sv._process is None
+            or local_sv._process.poll() is not None
+        ), "SimVision process still alive after WCP shutdown"
+    finally:
+        local_srv._sv = None
+        await local_srv.close()
+        # Ensure any leftover Xvfb is cleaned up. stop() is idempotent.
+        await local_sv.stop()
+
+
 async def test_wcp_gui_event_forwarded_to_subscribed_client(sv, wcp_port):
     """Events pushed via `::mcp::push_event` are delivered to clients that
     subscribed for them, and dropped for clients that didn't.
