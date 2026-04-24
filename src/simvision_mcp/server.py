@@ -111,6 +111,15 @@ def _using(window: str | None) -> str:
     return f" -using {tcl_brace(window)}" if window else ""
 
 
+async def _ensure_waveform_window(client) -> None:
+    # `waveform add` errors with "no waveform window name entered" when no
+    # window is current. Auto-create one the first time we need it so callers
+    # can `load_database` → `add_signals` without the GUI setup step.
+    await client.send(
+        "if {[catch {waveform using} __r]} {waveform new -name main}; set _ ok"
+    )
+
+
 async def _send_as_json_list(tcl: str, session: str | None = None) -> str:
     """Run a Tcl command expected to return a list, return it as a JSON array.
 
@@ -558,7 +567,10 @@ async def add_signals(
     for s in signals:
         full = f"{scope}.{s}" if scope else s
         qualified.append(_normalize_signal_path(full))
-    await (await _sv(session)).send(
+    client = await _sv(session)
+    if window is None:
+        await _ensure_waveform_window(client)
+    await client.send(
         f"waveform add{_using(window)} -signals {tcl_list(qualified)}"
     )
     return json.dumps(qualified)
@@ -593,6 +605,8 @@ async def add_signals_matching(
     if not names:
         return "[]"
     qualified = [_normalize_signal_path(n) for n in names]
+    if window is None:
+        await _ensure_waveform_window(client)
     await client.send(
         f"waveform add{_using(window)} -signals {tcl_list(qualified)}"
     )
