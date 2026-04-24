@@ -137,11 +137,18 @@ class WcpSession:
 async def _handle_load(sess: WcpSession, msg: dict) -> dict:
     source = msg["source"]
     abs_path = os.path.abspath(source)
+    # Force the SimVision database name to "waves" so WCP-style signal paths
+    # like `waves:::tb.clk` resolve. Without this, SimVision auto-names the
+    # database after the file (e.g. "tiny" for tiny.vcd) and `waves:::tb.clk`
+    # references resolve to nothing — they show as "placeholder for future
+    # object creation" in the rendered waveform.
+    # Pre-close any existing "waves" database so reload (and back-to-back
+    # loads) don't trip "database name 'waves' is already in use".
+    await sess.sv.send("catch {database close waves}")
     raw = await sess.sv.send(
-        f"database open -overwrite {tcl_brace(abs_path)}"
+        f"database open -overwrite -name waves {tcl_brace(abs_path)}"
     )
-    # `database open` returns the logical name. Remember it + the unit.
-    db_name = raw.strip()
+    db_name = raw.strip() or "waves"
     sess.last_source = abs_path
     # Attempt to learn the time unit for future BigInt conversions.
     try:
@@ -388,6 +395,52 @@ async def _handle_get_item_info(sess: WcpSession, msg: dict) -> dict:
     return {"results": results}
 
 
+async def _handle_screenshot(sess: WcpSession, msg: dict) -> dict:
+    """Non-spec extension: render the current waveform window to PNG/JPG/PDF
+    and return the bytes inline as base64.
+
+    Pipeline: SimVision `waveform print -file <ps>` → Ghostscript → optional
+    rotation. Reuses `simvision_mcp.server`'s helpers so we have one
+    rasterization path, not two.
+    """
+    import base64
+    import os
+    import tempfile
+    from simvision_mcp.server import _rasterize_postscript, _rotate_image_90_cw
+
+    fmt = (msg.get("format") or "png").lower()
+    if fmt not in ("png", "jpg", "jpeg", "pdf", "ps"):
+        raise SimVisionError(f"unsupported screenshot format: {fmt!r}")
+
+    await _ensure_waveform_window(sess)
+    with tempfile.NamedTemporaryFile(suffix=".ps", delete=False) as tf:
+        ps_path = tf.name
+    out_path = ps_path.replace(".ps", f".{fmt}")
+    try:
+        await sess.sv.send(
+            f"waveform print -file {tcl_brace(ps_path)} -orientation landscape"
+        )
+        if fmt == "ps":
+            with open(ps_path, "rb") as f:
+                data = f.read()
+        else:
+            result = _rasterize_postscript(ps_path, out_path)
+            if isinstance(result, str) and result.startswith("Error:"):
+                raise SimVisionError(result)
+            if fmt in ("png", "jpg", "jpeg"):
+                _rotate_image_90_cw(out_path)
+            with open(out_path, "rb") as f:
+                data = f.read()
+        return {"format": fmt, "data": base64.b64encode(data).decode("ascii")}
+    finally:
+        for p in (ps_path, out_path):
+            if os.path.exists(p):
+                try:
+                    os.unlink(p)
+                except OSError:
+                    pass
+
+
 async def _handle_shutdown(sess: WcpSession, msg: dict) -> dict:
     # Tear down SimVision; the connection will close after we return.
     try:
@@ -478,6 +531,8 @@ SUPPORTED: dict[str, Any] = {
     "get_item_list": _handle_get_item_list,
     "get_item_info": _handle_get_item_info,
     "shutdown": _handle_shutdown,
+    # Non-spec extension: render the waveform server-side and ship bytes back.
+    "screenshot": _handle_screenshot,
 }
 
 

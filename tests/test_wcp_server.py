@@ -190,7 +190,7 @@ async def test_wcp_add_scope_non_recursive(sv, wcp_port):
         await sv.send("waveform new -name Scope")
         await sv.send("waveform using Scope")
         await client.call("load", source=VCD)
-        resp = await client.call("add_scope", scope="tiny::tb", recursive=False)
+        resp = await client.call("add_scope", scope="waves::tb", recursive=False)
         assert len(resp["ids"]) >= 3  # clk, counter, valid
 
 
@@ -201,7 +201,7 @@ async def test_wcp_add_scope_recursive(sv, wcp_port):
         await sv.send("waveform new -name ScopeRec")
         await sv.send("waveform using ScopeRec")
         await client.call("load", source=VCD)
-        resp = await client.call("add_scope", scope="tiny::", recursive=True)
+        resp = await client.call("add_scope", scope="waves::", recursive=True)
         assert len(resp["ids"]) >= 3
 
 
@@ -254,10 +254,10 @@ async def test_wcp_add_items_mixed(sv, wcp_port):
         await sv.send("waveform using Mixed")
 
         await client.call("load", source=VCD)
-        # Mix a scope (tiny::tb) and a signal path (tiny:::tb.clk).
+        # Mix a scope (waves::tb) and a signal path (waves:::tb.clk).
         resp = await client.call(
             "add_items",
-            items=["tiny::tb", "tiny:::tb.clk"],
+            items=["waves::tb", "waves:::tb.clk"],
             recursive=False,
         )
         # The scope expands to 3 signals; the explicit clk dedups internally
