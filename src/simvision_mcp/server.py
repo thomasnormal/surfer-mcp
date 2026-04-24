@@ -831,83 +831,7 @@ async def sim_showvalue(names: list[str], session: str | None = None) -> str:
 # Screenshots
 # -----------------------------------------------------------------------------
 
-def _rotate_image_90_cw(path: str) -> None:
-    """Rotate an image file 90° clockwise in place.
-
-    Only touches PNG/JPG — leaves PS/PDF alone since they have their own
-    orientation metadata. Silently no-ops if Pillow isn't installed.
-    """
-    ext = path.rsplit(".", 1)[-1].lower() if "." in path else ""
-    if ext not in ("png", "jpg", "jpeg"):
-        return
-    try:
-        from PIL import Image as _PIL
-    except ImportError:
-        return
-    with _PIL.open(path) as img:
-        # PIL's `rotate` is CCW-positive; -90° is one step clockwise.
-        img.rotate(-90, expand=True).save(path)
-
-
-def _rasterize_postscript(ps_path: str, output_path: str) -> str:
-    """Convert a PostScript file to PNG/PDF/JPG based on output_path's extension.
-
-    Prefers Ghostscript (`gs`), falls back to `ps2pdf` for PDFs or ImageMagick
-    `convert`. Returns the output path on success, or a string starting with
-    "Error:" on failure. If the caller requests a .ps extension, the PS file
-    is simply copied to the destination.
-
-    This is a pure filesystem function — no SimVision client needed — so tests
-    can exercise it directly with a hand-crafted PS file.
-    """
-    import subprocess
-    import shutil as _sh
-
-    abs_out = os.path.abspath(output_path)
-    ext = abs_out.rsplit(".", 1)[-1].lower() if "." in abs_out else ""
-
-    if not os.path.isfile(ps_path):
-        return f"Error: no PostScript at {ps_path}"
-
-    if ext == "ps":
-        _sh.copy(ps_path, abs_out)
-        return abs_out
-
-    gs = shutil.which("gs")
-    convert = shutil.which("convert") or shutil.which("magick")
-
-    if ext == "pdf" and shutil.which("ps2pdf"):
-        r = subprocess.run(
-            ["ps2pdf", ps_path, abs_out],
-            capture_output=True, text=True, timeout=30,
-        )
-        if r.returncode == 0 and os.path.isfile(abs_out):
-            return abs_out
-
-    if gs and ext in ("png", "jpg", "jpeg", "pdf"):
-        device = {"png": "png16m", "jpg": "jpeg", "jpeg": "jpeg", "pdf": "pdfwrite"}[ext]
-        r = subprocess.run(
-            [
-                gs, "-dSAFER", "-dBATCH", "-dNOPAUSE", "-dQUIET",
-                f"-sDEVICE={device}", "-r150",
-                f"-sOutputFile={abs_out}", ps_path,
-            ],
-            capture_output=True, text=True, timeout=30,
-        )
-        if r.returncode == 0 and os.path.isfile(abs_out):
-            return abs_out
-        return f"Error: gs failed: {(r.stderr or r.stdout).strip()}"
-
-    if convert:
-        r = subprocess.run(
-            [convert, "-density", "150", ps_path, abs_out],
-            capture_output=True, text=True, timeout=30,
-        )
-        if r.returncode == 0 and os.path.isfile(abs_out):
-            return abs_out
-        return f"Error: convert failed: {r.stderr.strip()}"
-
-    return "Error: no rasterizer found (install ghostscript or imagemagick)"
+from simvision_mcp.raster import rasterize_postscript, rotate_image_90_cw
 
 
 def _inline_image_result(path: str, summary: str) -> list:
@@ -956,7 +880,7 @@ async def screenshot_waveform(
         )
         if not os.path.isfile(ps_path):
             return f"Error: SimVision did not create {ps_path}"
-        result = _rasterize_postscript(ps_path, output_path)
+        result = rasterize_postscript(ps_path, output_path)
         if result.startswith("Error:"):
             return result
         # SimVision's waveform PS sets `%%Orientation: Landscape` but writes
@@ -964,7 +888,7 @@ async def screenshot_waveform(
         # top→bottom, later times at the bottom). Ghostscript renders that
         # portrait faithfully, so we rotate 90° CW to restore the natural
         # left→right time reading direction.
-        _rotate_image_90_cw(result)
+        rotate_image_90_cw(result)
         return _inline_image_result(result, f"Saved waveform screenshot to {result}")
     finally:
         if os.path.exists(ps_path):

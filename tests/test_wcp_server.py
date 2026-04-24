@@ -346,6 +346,28 @@ async def test_wcp_gui_event_not_forwarded_to_unsubscribed(sv, wcp_port):
         assert resp["command"] == "get_item_list"
 
 
+async def test_wcp_screenshot_returns_png_bytes(sv, wcp_port):
+    """Non-spec `screenshot` extension renders the waveform window and returns
+    base64 PNG bytes inline.
+    """
+    import base64
+
+    async with await WcpClient.connect(wcp_port) as client:
+        assert "screenshot" in client.server_commands
+        await client.call("load", source=VCD)
+        await client.call("add_variables", variables=["waves:::tb.clk"])
+
+        resp = await client.call("screenshot", format="png")
+        assert resp.get("format") == "png"
+        data = base64.b64decode(resp["data"])
+        # PNG file signature: \x89PNG\r\n\x1a\n
+        assert data[:8] == b"\x89PNG\r\n\x1a\n", (
+            f"not a PNG: {data[:8]!r}"
+        )
+        # Sanity: a real waveform render is several KB, not a stub.
+        assert len(data) > 2000, f"suspiciously small PNG: {len(data)} bytes"
+
+
 async def test_wcp_waveforms_loaded_event(sv, wcp_port):
     """When the client subscribes to `waveforms_loaded`, the server emits
     one after a `load`.
