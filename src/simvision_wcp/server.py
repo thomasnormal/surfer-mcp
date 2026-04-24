@@ -167,10 +167,19 @@ async def _handle_reload(sess: WcpSession, msg: dict) -> dict:
     return await _handle_load(sess, {"source": sess.last_source})
 
 
+async def _ensure_waveform_window(sess: WcpSession) -> None:
+    # `waveform add` errors with "no waveform window name entered" when no
+    # window is current. Auto-create a "wcp" window the first time we need one.
+    await sess.sv.send(
+        "if {[catch {waveform using} __r]} {waveform new -name wcp}; set _ ok"
+    )
+
+
 async def _handle_add_variables(sess: WcpSession, msg: dict) -> dict:
     variables: list[str] = msg["variables"]
     if not variables:
         return {"ids": []}
+    await _ensure_waveform_window(sess)
     # WCP signal paths: the client is responsible for correct form (db:::path).
     # We don't second-guess here — Surfer's clients pass what they read from
     # get_item_info or from the hierarchy they walked.
