@@ -406,7 +406,7 @@ async def _handle_screenshot(sess: WcpSession, msg: dict) -> dict:
     import base64
     import os
     import tempfile
-    from simvision_mcp.server import _rasterize_postscript, _rotate_image_90_cw
+    from simvision_mcp.server import rasterize_postscript, rotate_image_90_cw
 
     fmt = (msg.get("format") or "png").lower()
     if fmt not in ("png", "jpg", "jpeg", "pdf", "ps"):
@@ -424,11 +424,11 @@ async def _handle_screenshot(sess: WcpSession, msg: dict) -> dict:
             with open(ps_path, "rb") as f:
                 data = f.read()
         else:
-            result = _rasterize_postscript(ps_path, out_path)
+            result = rasterize_postscript(ps_path, out_path)
             if isinstance(result, str) and result.startswith("Error:"):
                 raise SimVisionError(result)
             if fmt in ("png", "jpg", "jpeg"):
-                _rotate_image_90_cw(out_path)
+                rotate_image_90_cw(out_path)
             with open(out_path, "rb") as f:
                 data = f.read()
         return {"format": fmt, "data": base64.b64encode(data).decode("ascii")}
