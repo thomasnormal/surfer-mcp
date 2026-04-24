@@ -19,7 +19,7 @@ simvision-mcp = "simvision_mcp.server:main"
 simvision-wcp = "simvision_wcp.server:main"
 
 [project.optional-dependencies]
-dev = ["pytest>=7"]
+dev = ["pytest>=7", "pytest-asyncio>=0.23"]
 
 [build-system]
 requires = ["hatchling"]
@@ -31,3 +31,6 @@ packages = ["src/surfer_mcp", "src/simvision_mcp", "src/simvision_wcp"]
 [tool.pytest.ini_options]
 testpaths = ["tests"]
 addopts = "-ra"
+asyncio_mode = "auto"
+asyncio_default_fixture_loop_scope = "session"
+asyncio_default_test_loop_scope = "session"
