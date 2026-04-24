@@ -459,8 +459,11 @@ async def _handle_shutdown(sess: WcpSession, msg: dict) -> dict:
 # SimVisionClient's background reader demuxes those into its event queue, and
 # _forward_events() relays them to each connected WCP client.
 
+_GUI_EVENT_NAMES = {"goto_declaration", "add_drivers", "add_loads"}
+
 _EVENT_MENU_TCL = r"""
 # Idempotent — safe to call on every WCP client connect.
+namespace eval ::wcp {}
 if {[info commands ::wcp::_installed] eq ""} {
     proc ::wcp::_installed {} {}
     # %o is the object (signal) the menu fired on.
@@ -480,11 +483,14 @@ if {[info commands ::wcp::_installed] eq ""} {
 async def _register_gui_event_hooks(sv: SimVisionClient, subscribed: set[str]) -> None:
     """Install custom menu items that emit WCP events when clicked.
 
-    Only installs once per SimVision session (idempotent). Menu items stay
-    installed even after the WCP client disconnects; they're harmless if no
-    client is listening because `::mcp::push_event` no-ops when the socket
-    is gone.
+    Only installs once per SimVision session (idempotent), and only when the
+    client has asked for a human-click event that needs GUI menu integration.
+    Menu items stay installed even after the WCP client disconnects; they're
+    harmless if no client is listening because `::mcp::push_event` no-ops when
+    the socket is gone.
     """
+    if not (_GUI_EVENT_NAMES & subscribed):
+        return
     try:
         await sv.send(_EVENT_MENU_TCL)
     except SimVisionError as e:
