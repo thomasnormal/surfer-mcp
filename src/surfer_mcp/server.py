@@ -420,11 +420,28 @@ async def screenshot(output_path: str) -> str:
     """
     import subprocess as sp
 
-    if not _client.running or _client._process is None:
+    if not _client.running:
         return "Error: Surfer is not running"
 
-    pid = _client._process.pid
     abs_output = os.path.abspath(output_path)
+
+    # Dial-mode (e.g. simvision-wcp): no Surfer process to capture from. Ask
+    # the WCP server to render server-side and ship the bytes back.
+    if _client._process is None:
+        import base64
+        ext = os.path.splitext(abs_output)[1].lstrip(".").lower() or "png"
+        try:
+            resp = await _client.send_command("screenshot", format=ext)
+        except Exception as e:
+            return f"Error: WCP screenshot command failed: {e}"
+        data = resp.get("data")
+        if not data:
+            return f"Error: WCP server returned no image data: {resp}"
+        with open(abs_output, "wb") as f:
+            f.write(base64.b64decode(data))
+        return f"Screenshot saved to {abs_output}"
+
+    pid = _client._process.pid
 
     # Find the Surfer window ID via Quartz CoreGraphics
     try:

@@ -71,8 +71,9 @@ async def test_load_via_surfer_client(sv, surfer_client):
     await sv.send("catch {database close waves}")
     # surfer-mcp's wire command name is `load` with a `source` field.
     await surfer_client.send_command("load", source=VCD)
-    # The database should now exist under SimVision's default name ("tiny").
-    assert "tiny" in await sv.send("database find")
+    # simvision-wcp pins the database name to "waves" so WCP-style paths
+    # (`waves:::tb.clk`) resolve.
+    assert "waves" in await sv.send("database find")
 
 
 async def test_add_variables_via_surfer_client(sv, surfer_client):
